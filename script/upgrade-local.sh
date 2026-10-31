@@ -29,14 +29,12 @@ step() { printf '\n== %s\n' "$*"; }
 die()  { printf 'upgrade-local: %s\n' "$*" >&2; exit 1; }
 
 # --- 1. resolve bun (pinned by packageManager; build refuses any other) --------
-bun_bin=""
-for cand in \
-  "$HOME/.local/share/fnm/node-versions/v24.22.0/installation/bin/bun" \
-  "$(command -v bun || true)"; do
-  [ -n "$cand" ] && [ -x "$cand" ] || continue
-  if "$cand" --version 2>/dev/null | grep -qx '1\.3\.14'; then bun_bin="$cand"; break; fi
-done
-[ -n "$bun_bin" ] || die "bun 1.3.14 not found (build requires the pinned version)"
+# Hardcoded: cron has no fnm on PATH, so probing `command -v bun` finds 1.3.6
+# and the build script refuses to run. MIMO_LOCAL_BUN overrides for other setups.
+bun_bin="${MIMO_LOCAL_BUN:-/Users/mlong/.local/share/fnm/node-versions/v24.22.0/installation/bin/bun}"
+if [ ! -x "$bun_bin" ] || ! "$bun_bin" --version 2>/dev/null | grep -qx '1\.3\.14'; then
+  die "bun 1.3.14 not found at $bun_bin (build requires the pinned version; set MIMO_LOCAL_BUN)"
+fi
 
 # --- 2. what would we build against? -----------------------------------------
 cd "$REPO_DIR"
@@ -109,6 +107,12 @@ else
   mkdir -p "$BIN_DIR"
   cp "$BUILT" "$DEST"
   chmod +x "$DEST"
+  # macOS caches the code signature per PATH. Copying new bytes over an
+  # existing path leaves a stale cache entry and the kernel SIGKILLs the
+  # exec (exit 137) — the bytes themselves are fine. Re-signing refreshes
+  # it. Confirmed: stock 0.1.16 bytes die at path mimo-local yet run fine
+  # under any other name until this is run.
+  codesign --force --sign - "$DEST" >/dev/null 2>&1 || true
 fi
 
 # --- 5. install: never overwrite a live executable ----------------------------
@@ -128,6 +132,7 @@ else
   else
     cp "$DEST" "$BIN_DIR/$LIVE_NAME"
     chmod +x "$BIN_DIR/$LIVE_NAME"
+    codesign --force --sign - "$BIN_DIR/$LIVE_NAME" >/dev/null 2>&1 || true
     log "  installed -> $BIN_DIR/$LIVE_NAME"
   fi
 fi
